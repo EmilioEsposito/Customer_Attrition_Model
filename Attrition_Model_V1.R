@@ -12,7 +12,7 @@ setwd(".")
 getwd()
 # read in ecard data
 ecard <- read.csv("ltv.csv", sep = ",", header = TRUE)
-
+#test2
 ############################
 ############################
 #Data prep
