@@ -16,17 +16,17 @@ do_cv_user <- function(df, num_folds, model_name,  frm="ytrain~.") {
     df[ , nf] <- as.numeric(df[ , nf])
     
     ##first level will be mapped to 1, second level will be 0
-    df[ , nf] <- mapvalues(df[ , nf], c(1,2), c(1,0))
+    #df[ , nf] <- mapvalues(df[ , nf], c(1,2), c(1,0))
   }
   
   #make empty vector to store all pred_truth
   pred_truth_df <- data.frame()
   pred_truth_all <- data.frame()
-  users.avail <- c(1:10000)
+  users.avail <- unique(df$id)
   #subset the df into test and train
   for(i in 1:num_folds) {
-    
-    rand.test.users <- sample(users.avail,size=10000/num_folds,replace=FALSE)
+   
+    rand.test.users <- sample(users.avail,size=min(length(unique(df$id))/num_folds,length(users.avail)),replace=FALSE)
     length(rand.test.users)
     users.avail <- users.avail[!users.avail %in% rand.test.users]
     length(users.avail)
@@ -35,6 +35,7 @@ do_cv_user <- function(df, num_folds, model_name,  frm="ytrain~.") {
     train <- df[-which(df[,"id"] %in% rand.test.users), ,drop=FALSE]
     test <- df[which(df[,"id"] %in% rand.test.users), ,drop=FALSE]
     test_full <- test
+    train_full <- test
     
     #drop id and period
     drop_index <- which(names(train)=="id")
@@ -60,11 +61,15 @@ do_cv_user <- function(df, num_folds, model_name,  frm="ytrain~.") {
       #run the model 
       pred_truth <- get_pred_log_regfrm(train,test,frm)
       message("glmer model")
+    } else if(grepl(pattern = "cox", x= model_name)) {
+      #run the model 
+      pred_truth <- get_pred_cox(train_full, test_full)
+      message("cox model")
     } else {
       #run the model 
       model <- get(paste("get_pred_", model_name, sep = ""), mode="function") 
       pred_truth <- model(train, test)
-      message("general model")
+      message("running fold")
     }
     pred_truth_df <- cbind(test_full, pred_truth)
     #accumulate results for all folds
@@ -336,7 +341,7 @@ get_pred_tree <- function(train, test) {
   # plot tree 
   plot(pfit, uniform=TRUE, 
        main="Classification Tree for Ecard Attrition")
-  text(pfit, use.n=TRUE, all=TRUE, cex=.8)
+  text(pfit, use.n=TRUE, all=TRUE, cex=.8, pretty=TRUE)
   
   # create attractive postscript plot of tree 
   post(pfit, file = "tree.ps", 
@@ -347,7 +352,7 @@ get_pred_tree <- function(train, test) {
   colnames(xtest) <- colnames(test)[1:ncol(xtest)]
   
   #get predicted values based on test df
-  pred <- predict(fit, xtest, type = "prob")
+  pred <- predict(pfit, xtest, type = "prob")
   #only keep probability of factor "1"
   pred <- pred[,"1"]
   
@@ -383,23 +388,16 @@ get_pred_randomForest <- function(train, test) {
   xtest <- data.frame(test[ , -nf])
   colnames(xtest) <- colnames(test)[1:ncol(xtest)]
   
-  pfit<- prune(fit, cp=   fit$cptable[which.min(fit$cptable[,"xerror"]),"CP"])
-  
-    printcp(pfit) # display the results 
-    plotcp(pfit) # visualize cross-validation results 
-    summary(pfit) # detailed summary of splits
-    
+ 
+
     # plot tree 
-    plot(pfit, uniform=TRUE, 
+    plot(fit, uniform=TRUE, 
          main="Classification Tree for Kyphosis")
-    text(pfit, use.n=TRUE, all=TRUE, cex=.8)
+    text(fit, use.n=TRUE, all=TRUE, cex=.8)
     
-    # create attractive postscript plot of tree 
-    post(pfit, file = "tree.ps", 
-         title = "Classification Tree for Ecard Attrition")
-  
+
   #get predicted values based on test df
-  pred <- predict(pfit, xtest, type = "prob")
+  pred <- predict(fit, xtest, type = "prob")
   #only keep probability of factor "1"
   pred <- pred[,"1"]
   
@@ -411,3 +409,75 @@ get_pred_randomForest <- function(train, test) {
   return(pred_truth)
 }
 
+write.csv <- function(ob, filename) {
+  write.table(ob, filename, quote = FALSE, sep = ",", row.names = FALSE)
+}
+
+
+get_rmse <- function(pred_truth) {
+  #calculate predicted output minus test actual output:
+  error <- pred_truth$pred - pred_truth$truth
+  
+  #calc Sum Squared Errors (SSE)
+  SSE <- sum(error*error)
+  #calc Mean Squared Errors (MSE)
+  MSE <- SSE/nrow(pred_truth)
+  RMSE <- MSE^.5
+  return(RMSE)
+}
+
+get_pred_lr <- function(train,test){
+  # Your implementation goes here
+  # You may leverage lm function available in R
+  
+  #get number of features
+  nf <- ncol(train)
+  
+  #get independent variable for training
+  ytrain <- train[ , nf]
+  #colnames(ytrain) <- colnames(train)[ncol(ytrain)]
+  
+  #get dependent variables for training
+  xtrain <- data.frame(train[ , -nf])
+  colnames(xtrain) <- colnames(train)[1:ncol(xtrain)]
+  
+  lin_mod <- lm(ytrain~., data = xtrain)
+  
+  #get dependent variables for testing
+  xtest <- test
+  colnames(xtest) <- colnames(test)[1:ncol(xtest)]
+  
+  #get predicted values based on test df
+  pred <- predict(lin_mod, xtest)
+  
+  #get true values of test
+  truth <- test[,nf]
+  
+  pred_truth <- cbind(pred, truth)
+  
+  return(pred_truth)
+}
+
+
+library(survival)
+
+get_pred_cox <- function(train,test){
+  # Your implementation goes here
+  # You may leverage lm function available in R
+  
+  #get number of features
+  nf <- ncol(train)
+  
+  model <- coxph(Surv(days_open, cancel) ~ entered + onsite + num_trns + num_trns + holiday + cluster(id), train) 
+  
+  #get predicted values based on test df
+  pred <- predict(model)
+  pred <- as.data.frame(pred, test)
+  
+  #get true values of test
+  truth <- test[,"cancel"]
+  
+  pred_truth <- cbind(pred, truth)
+  
+  return(pred_truth)
+}
